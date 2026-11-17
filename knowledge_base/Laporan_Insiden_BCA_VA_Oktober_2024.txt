@@ -1,0 +1,59 @@
+================================================================================
+LAPORAN POST-MORTEM INSIDEN TEKNIS (INCIDENT POST-MORTEM REPORT)
+PT INTEGRASI PEMBAYARAN DIGITAL - NETWORK OPERATIONS CENTER
+================================================================================
+
+ID Insiden       : INC-20241015-BCA-VA-TIMEOUT
+Tingkat Keparahan: SEV-1 (High Impact - Major Financial Anomaly)
+Layanan Terdampak: Channel VIRTUAL_ACCOUNT (Mitra Bank: BCA)
+Waktu Mulai      : Selasa, 15 Oktober 2024, Pukul 10:15 WIB
+Waktu Selesai    : Minggu, 20 Oktober 2024, Pukul 18:00 WIB
+Durasi Gangguan  : 5 Hari 7 Jam 45 Menit
+Lead Investigator: Tim Infrastructure & Payment Gateway Core
+
+--------------------------------------------------------------------------------
+1. RINGKASAN EKSEKUTIF (EXECUTIVE SUMMARY)
+--------------------------------------------------------------------------------
+Pada rentang tanggal 15 hingga 20 Oktober 2024, sistem monitoring transaksi mendeteksi 
+lonjakan signifikan pada rasio kegagalan (Failure Rate) khusus pada channel VIRTUAL_ACCOUNT 
+dengan mitra perbankan BCA. 
+
+Metrik Dampak Utama:
+- Rasio Kegagalan (Failure Rate) BCA VA melonjak dari rata-rata normal 3.2% menjadi 48.7%.
+- Kode error yang mendominasi kegagalan: ERR_BANK_TIMEOUT (>94% dari seluruh kegagalan).
+- Rata-rata waktu respons transaksi (Response Time Latency) melonjak drastis dari 
+  normal 420 ms menjadi 18.500 ms - 26.000 ms sebelum akhirnya mengalami socket timeout.
+- Channel lain (QRIS, Kartu Kredit, E-Wallet) dan partner bank lain (Mandiri, BNI) 
+  tetap beroperasi normal pada tingkat keberhasilan 96% - 98%.
+
+--------------------------------------------------------------------------------
+2. AKAR PERMASALAHAN (ROOT CAUSE ANALYSIS)
+--------------------------------------------------------------------------------
+Berdasarkan hasil investigasi bersama dan klarifikasi resmi dari Network Operations Center (NOC) Bank BCA:
+1. Mitra perbankan BCA sedang melakukan peningkatan arsitektur sistem inti (Core Banking Upgrade) 
+   dari protokol Gateway v3.1 ke Gateway v4.0 pada datacenter primer mereka.
+2. Proses migrasi tersebut menyebabkan kemacetan antrean (packet queue congestion) dan packet loss 
+   pada port API callback payment notification menuju payment gateway eksternal.
+3. Server internal kita mengalami socket read timeout setelah menunggu respon lebih dari 15 detik, 
+   sehingga transaksi otomatis ditandai sebagai FAILED dengan kode error ERR_BANK_TIMEOUT.
+
+--------------------------------------------------------------------------------
+3. TINDAKAN PENANGANAN & MITIGASI (MITIGATION STEPS)
+--------------------------------------------------------------------------------
+1. Tanggal 16 Oktober 2024 14:00 WIB:
+   Tim IT melakukan konfigurasi penyesuaian socket timeout dari 15 detik menjadi 30 detik 
+   untuk mengurangi transaksi yang gugur sebelum callback diterima.
+2. Tanggal 17 Oktober 2024 09:00 WIB:
+   Mengaktifkan perutean jalur cadangan (Secondary Disaster Recovery Gateway Connector) 
+   bekerja sama dengan tim infrastruktur BCA.
+3. Tanggal 20 Oktober 2024 18:00 WIB:
+   Mitra BCA menyelesaikan stabilisasi gateway v4.0. Latensi transaksi kembali normal 
+   ke angka 380 ms dan rasio keberhasilan transaksi BCA VA pulih ke 96.5%.
+
+--------------------------------------------------------------------------------
+4. STATUS REKONSILIASI DANA
+--------------------------------------------------------------------------------
+Sebanyak 384 transaksi nasabah yang sempat mengalami pemotongan saldo namun berstatus 
+FAILED telah diselesaikan melalui prosedur sinkronisasi mutasi bank dan auto-reversal 
+sesuai dengan SOP-OPS-FIN-2024-V2.
+================================================================================
