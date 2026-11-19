@@ -20,7 +20,10 @@ from dotenv import load_dotenv
 
 # Import agent runner
 from backend.agent import run_agent_turn
+from backend import chat_store
+from backend.llm_client import last_llm_status
 from mcp_servers.analytics_server import get_db_connection, get_database_schema
+from mcp_servers.source_registry import get_source_status, list_all_sources, get_all_schemas_text
 from mcp_servers.knowledge_server import collection
 
 load_dotenv()
@@ -61,25 +64,17 @@ class ChatResponse(BaseModel):
     sql_data: Optional[List[Dict[str, Any]]] = None
     chart_config: Optional[Dict[str, Any]] = None
     cited_documents: List[DocumentCitation] = []
+    sources_used: List[str] = []
+    attempts: List[Dict[str, Any]] = []
 
 
 # === API Endpoints ===
 
 @app.get("/api/health", summary="Health Check Status Sistem")
 def health_check():
-    """Memeriksa kesiapan Database PostgreSQL, ChromaDB, dan Kunci API Gemini."""
-    # 1. Cek PostgreSQL
-    db_status = "Disconnected"
-    total_transactions = 0
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM transactions;")
-            total_transactions = cur.fetchone()["count"]
-        conn.close()
-        db_status = "Connected"
-    except Exception as e:
-        db_status = f"Error: {str(e)}"
+    """Memeriksa kesiapan SEMUA sumber data (PostgreSQL + file/sheet), ChromaDB, dan Gemini."""
+    # 1. Status per sumber data (postgres + CSV/XLSX/JSON/gsheet dari registry)
+    source_status = get_source_status()
 
     # 2. Cek ChromaDB
     chroma_status = "Ready"
@@ -89,23 +84,44 @@ def health_check():
     except Exception as e:
         chroma_status = f"Error: {str(e)}"
 
-    # 3. Cek API Key
+    # 3. Cek API Key + status panggilan LLM terakhir
     has_api_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
 
+    pg = next((s for s in source_status["sources"] if s["name"] == "postgres"), {})
+    total_transactions = (pg.get("row_counts") or {}).get("transactions", 0)
+
     return {
-        "status": "healthy" if db_status == "Connected" else "degraded",
+        "status": "healthy" if source_status["healthy"] else "degraded",
         "database": {
-            "status": db_status,
+            "status": "Connected" if source_status["postgres_connected"] else "Disconnected",
             "engine": "PostgreSQL (Docker)",
             "total_transactions": total_transactions
         },
+        "data_sources": source_status["sources"],
         "vector_store": {
             "status": chroma_status,
             "engine": "ChromaDB (Local)",
             "indexed_chunks": doc_count
         },
-        "gemini_api_configured": has_api_key
+        "gemini_api_configured": has_api_key,
+        "llm_last_status": last_llm_status,
+        "chat_history_enabled": chat_store.init_store()
     }
+
+
+@app.get("/api/sources", summary="Daftar Sumber Data & Skemanya")
+def sources_endpoint():
+    """Daftar semua sumber data terdaftar beserta skema (untuk panel info UI)."""
+    return {
+        "sources": list_all_sources(),
+        "schemas_text": get_all_schemas_text()
+    }
+
+
+@app.get("/api/history/{session_id}", summary="Riwayat Percakapan per Sesi")
+def history_endpoint(session_id: str):
+    """Mengembalikan riwayat chat sesi untuk restore UI setelah refresh browser."""
+    return {"session_id": session_id, "messages": chat_store.get_session_messages(session_id)}
 
 
 @app.get("/api/test-agent", summary="Test Agent Models and Tools")
@@ -159,7 +175,7 @@ def chat_endpoint(req: ChatRequest):
         if not req.message.strip():
             raise HTTPException(status_code=400, detail="Pesan tidak boleh kosong.")
 
-        result = run_agent_turn(user_message=req.message)
+        result = run_agent_turn(user_message=req.message, session_id=req.session_id)
         return result
     except Exception as e:
         import traceback
@@ -170,7 +186,9 @@ def chat_endpoint(req: ChatRequest):
             "executed_sql": None,
             "sql_data": None,
             "chart_config": None,
-            "cited_documents": []
+            "cited_documents": [],
+            "sources_used": [],
+            "attempts": []
         }
 
 

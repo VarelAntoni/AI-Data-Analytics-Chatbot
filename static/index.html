@@ -6,8 +6,7 @@
     <title>AI-Powered Data Analytics Chatbot</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Plotly.js CDN untuk render grafik interaktif -->
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <!-- Plotly basic bundle (~1MB) di-lazy-load dari static/vendor saat chart pertama muncul -->
     <!-- Marked.js CDN untuk format Markdown -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- Google Font: Inter -->
@@ -44,6 +43,9 @@
 
         <!-- System Status Pills -->
         <div class="flex items-center space-x-2 text-xs">
+            <button onclick="startNewSession()" class="px-2.5 py-1 rounded-full bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors font-medium border border-slate-200" title="Mulai sesi percakapan baru (konteks bersih)">
+                + Sesi Baru
+            </button>
             <div id="status-db" class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
                 <span class="w-2 h-2 rounded-full bg-slate-400"></span>
                 <span>PostgreSQL</span>
@@ -126,6 +128,79 @@
         const sendBtn = document.getElementById('send-btn');
         let chartCounter = 0;
 
+        // === Sesi percakapan persisten (localStorage, tahan refresh) ===
+        let sessionId = localStorage.getItem('chat_session_id');
+        if (!sessionId) {
+            sessionId = (crypto.randomUUID ? crypto.randomUUID() : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+            localStorage.setItem('chat_session_id', sessionId);
+        }
+
+        function startNewSession() {
+            sessionId = (crypto.randomUUID ? crypto.randomUUID() : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+            localStorage.setItem('chat_session_id', sessionId);
+            // Kosongkan chat kecuali welcome banner (elemen pertama)
+            while (chatContainer.children.length > 1) {
+                chatContainer.removeChild(chatContainer.lastChild);
+            }
+        }
+
+        // === Lazy-load Plotly basic (self-host) hanya saat chart pertama dibutuhkan ===
+        let plotlyLoadPromise = null;
+        function ensurePlotly() {
+            if (window.Plotly) return Promise.resolve(true);
+            if (!plotlyLoadPromise) {
+                plotlyLoadPromise = new Promise((resolve) => {
+                    const s = document.createElement('script');
+                    s.src = '/static/vendor/plotly-basic.min.js';
+                    s.onload = () => resolve(true);
+                    s.onerror = () => { plotlyLoadPromise = null; resolve(false); };
+                    document.head.appendChild(s);
+                });
+            }
+            return plotlyLoadPromise;
+        }
+
+        // Batasi instance chart hidup agar sesi panjang tidak berat
+        const liveCharts = [];
+        const MAX_LIVE_CHARTS = 8;
+        function registerChart(id) {
+            liveCharts.push(id);
+            while (liveCharts.length > MAX_LIVE_CHARTS) {
+                const oldId = liveCharts.shift();
+                const el = document.getElementById(oldId);
+                if (el && window.Plotly) {
+                    try { Plotly.purge(el); el.innerHTML = '<div class="text-xs text-slate-400 p-4 text-center">(Grafik lama dilepas dari memori untuk performa)</div>'; } catch (e) {}
+                }
+            }
+        }
+
+        // === Restore riwayat saat halaman dimuat / refresh ===
+        async function restoreHistory() {
+            try {
+                const res = await fetch('/api/history/' + encodeURIComponent(sessionId));
+                const data = await res.json();
+                (data.messages || []).forEach(m => {
+                    if (m.role === 'user') {
+                        appendUserMessage(m.content);
+                    } else {
+                        const meta = m.metadata || {};
+                        appendBotMessage({
+                            answer: m.content,
+                            intent: meta.intent || 'GENERAL',
+                            executed_sql: meta.executed_sql || null,
+                            sql_data: null,
+                            chart_config: null, // skip chart saat restore (hemat)
+                            cited_documents: meta.cited_documents || [],
+                            sources_used: meta.sources_used || [],
+                            attempts: []
+                        });
+                    }
+                });
+            } catch (err) {
+                console.warn('Riwayat tidak dapat dimuat:', err);
+            }
+        }
+
         // Cek Health Check saat halaman pertama kali dimuat
         async function checkHealth() {
             try {
@@ -150,6 +225,7 @@
             }
         }
         checkHealth();
+        restoreHistory();
 
         function sendQuickPrompt(promptText) {
             userInput.value = promptText.replace(/^[^\w\s]+/, '').trim();
@@ -180,7 +256,7 @@
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: message })
+                    body: JSON.stringify({ message: message, session_id: sessionId })
                 });
 
                 const data = await response.json();
@@ -252,6 +328,18 @@
                 intentBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">DATA ANALYTICS (SQL)</span>`;
             } else if (data.intent === "DOCUMENT_RAG") {
                 intentBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">DOCUMENT SOP (RAG)</span>`;
+            } else if (data.intent === "QUOTA_EXHAUSTED") {
+                intentBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">KUOTA API HABIS</span>`;
+            } else if (data.intent === "NOT_FOUND") {
+                intentBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-300">DATA TIDAK DITEMUKAN</span>`;
+            }
+
+            // Badge sumber data yang dipakai + jumlah percobaan
+            let sourcesSection = "";
+            if (data.sources_used && data.sources_used.length > 0) {
+                const srcBadges = data.sources_used.map(s => `<span class="px-2 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 text-[10px] font-medium">${escapeHtml(s)}</span>`).join(' ');
+                const nAttempts = (data.attempts || []).length;
+                sourcesSection = `<div class="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400"><span class="uppercase tracking-wider font-semibold">Sumber:</span> ${srcBadges}${nAttempts ? `<span class="text-slate-400">· ${nAttempts} percobaan query</span>` : ''}</div>`;
             }
 
             // Collapsible Executed SQL Accordion
@@ -265,7 +353,7 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7c0-2-1.5-3-3.5-3h-9C5.5 4 4 5 4 7z" />
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m-6-8h6" />
                                 </svg>
-                                <span>Kueri SQL yang Dijalankan (PostgreSQL)</span>
+                                <span>Kueri SQL yang Dijalankan</span>
                             </span>
                             <span class="text-[10px] bg-slate-200 px-1.5 py-0.5 rounded text-slate-600 group-open:rotate-180 transition-transform">▼</span>
                         </summary>
@@ -320,6 +408,7 @@
                     <div class="prose text-slate-700 leading-relaxed text-sm">
                         ${parsedMarkdown}
                     </div>
+                    ${sourcesSection}
                     ${chartContainerHtml}
                     ${sqlSection}
                     ${citationSection}
@@ -327,12 +416,36 @@
             `;
             chatContainer.appendChild(div);
 
-            // Render Plotly Chart jika ada konfigurasi
+            // Render Plotly Chart jika ada konfigurasi (lazy-load library dulu)
             if (data.chart_config) {
-                setTimeout(() => renderPlotlyChart(chartDivId, data.chart_config), 50);
+                ensurePlotly().then(ok => {
+                    if (ok) {
+                        renderPlotlyChart(chartDivId, data.chart_config);
+                        registerChart(chartDivId);
+                    } else {
+                        // Fallback: library gagal dimuat -> tampilkan tabel dari sql_data
+                        const el = document.getElementById(chartDivId);
+                        if (el) el.innerHTML = buildFallbackTable(data.sql_data) || '<div class="text-xs text-slate-400 p-4">Grafik tidak dapat dimuat.</div>';
+                    }
+                });
             }
 
             scrollToBottom();
+        }
+
+        function buildFallbackTable(rows) {
+            if (!rows || !rows.length) return '';
+            const headers = Object.keys(rows[0]);
+            let html = '<div class="overflow-x-auto"><table class="w-full text-xs border-collapse"><thead><tr>';
+            headers.forEach(h => { html += `<th class="border border-slate-200 bg-slate-50 px-2 py-1 text-left">${escapeHtml(h)}</th>`; });
+            html += '</tr></thead><tbody>';
+            rows.slice(0, 10).forEach(r => {
+                html += '<tr>';
+                headers.forEach(h => { html += `<td class="border border-slate-200 px-2 py-1">${escapeHtml(String(r[h] ?? ''))}</td>`; });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            return html;
         }
 
         function renderPlotlyChart(elementId, config) {

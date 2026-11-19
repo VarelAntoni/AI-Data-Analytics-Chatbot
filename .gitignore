@@ -29,6 +29,9 @@ venv.bak/
 # 4. Local Vector Database (Generated locally by seed script)
 chroma_db/
 
+# 4b. Data uji lokal untuk smoke test multi-sumber (disajikan via http.server)
+data/test_sources/
+
 # 5. IDE & Editor Specific Files
 .vscode/
 .idea/

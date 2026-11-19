@@ -127,11 +127,17 @@ Pastikan file `.env` memiliki konfigurasi berikut:
 DB_HOST=127.0.0.1
 DB_PORT=5433
 DB_USER=postgres
-DB_PASSWORD=postgres
+DB_PASSWORD=postgrespassword
 DB_NAME=analytics_db
+PG_ALLOWED_TABLES=transactions
 
 GEMINI_API_KEY=AIzaSy...
-GEMINI_MODEL=gemini-3.8-flash
+
+# Multi-sumber & RAG (opsional, ada default)
+DATA_SOURCE_REFRESH_SECONDS=300
+RAG_TOP_K=3
+RAG_MAX_DISTANCE=1.5
+PDF_MIN_TEXT_CHARS=50
 ```
 
 ### 3. Jalankan Basis Data PostgreSQL (Docker)
@@ -174,14 +180,57 @@ python scripts/evaluate.py
 
 ---
 
+## 🌐 Multi-Sumber Data (CSV / XLSX / JSON / Google Sheets)
+
+Selain PostgreSQL, chatbot dapat menganalisis **file dari URL** dan **Google Sheets publik** secara otomatis.
+AI memilih sendiri sumber yang paling cocok per pertanyaan berdasarkan skema yang diinspeksi otomatis.
+
+### Cara Mendaftarkan Sumber
+Edit `data_sources.json` (contoh lengkap: `data_sources.example.json`):
+```json
+{
+  "sources": [
+    { "name": "penjualan", "type": "csv",  "url": "https://.../data.csv" },
+    { "name": "target",    "type": "xlsx", "url": "https://.../target.xlsx" },
+    { "name": "log",       "type": "json", "url": "https://.../log.json" },
+    { "name": "laporan",   "type": "gsheet", "url": "https://docs.google.com/spreadsheets/d/<ID>/edit" }
+  ]
+}
+```
+
+Perilaku penting:
+- **Google Sheets multi-tab**: semua tab ditemukan otomatis (sheet harus di-share *Anyone with the link – Viewer*). Tiap tab menjadi tabel SQL terpisah (nama snake_case), dan **join antar tab dalam satu sheet didukung**.
+- **Sheet bukan disalin ke PostgreSQL**: sheet tetap sumber kebenaran; di-fetch ke cache memori (TTL `DATA_SOURCE_REFRESH_SECONDS`, default 300 dtk) dan di-query via **DuckDB** in-process. Jika fetch gagal, cache lama dipakai (*stale-on-error*).
+- **Hanya data yang dibutuhkan** yang masuk konteks LLM (hasil query maks 100 baris).
+- Daftar sumber & skemanya bisa dilihat di `GET /api/sources` dan statusnya di `GET /api/health`.
+
+### Agent Retry Budget & Jawaban Jujur
+- Agent mencoba maksimal **3 percobaan SQL per sumber** per pertanyaan (di-enforce kode, bukan klaim LLM), dengan judge ringan yang menilai apakah hasil sudah cukup menjawab.
+- Jika semua percobaan gagal, chatbot menjawab **"Data tidak ditemukan"** beserta daftar percobaan — tidak pernah mengarang angka.
+- Jika **kuota API habis / server sibuk**, muncul pesan ramah (`QUOTA_EXHAUSTED`) dan data yang sempat diambil tetap ditampilkan.
+
+### Memori Percakapan (Checkpoint PostgreSQL)
+- Riwayat chat disimpan di tabel `chat_sessions` & `chat_messages` (metadata JSONB) — pola checkpoint manual tanpa LangGraph.
+- Follow-up seperti *"kalau September berapa?"* dipahami dari konteks 6 pesan terakhir.
+- Refresh browser tidak menghilangkan riwayat (`GET /api/history/{session_id}`); tombol **"+ Sesi Baru"** memulai konteks bersih.
+- Jika PostgreSQL mati, chatbot tetap berjalan tanpa history (degraded, bukan crash).
+
+### RAG Upgrade
+- `RAG_TOP_K` dan ambang relevansi `RAG_MAX_DISTANCE` dapat diatur via `.env` (chunk tidak relevan dibuang).
+- Chunking DOCX memakai **overlap 20%** agar fakta di batas chunk tidak hilang.
+- **PDF bergambar/scan**: halaman minim teks di-render (pypdfium2) lalu ditranskripsi **Gemini Vision**; metadata `extraction_method` mencatat asalnya (native/vision).
+
+---
+
 ## 📁 Struktur Direktori
 
 ```
 ai_data_analytics_chatbot/
 ├── backend/
-│   ├── __init__.py
-│   ├── agent.py               # Two-Stage Router & Synthesizer Orchestrator
-│   └── main.py                # Server FastAPI & endpoint REST API
+│   ├── agent.py               # Multi-source agent: planning -> retry loop -> synthesis
+│   ├── llm_client.py          # Gerbang LLM terpusat: retry, failover, klasifikasi error kuota
+│   ├── chat_store.py          # Memori percakapan (checkpoint PostgreSQL manual)
+│   └── main.py                # Server FastAPI: /chat /health /sources /history
 ├── data/
 │   ├── transactions.csv       # Ekspor data 20.000 transaksi
 │   ├── partner_settlement_directory.xlsx # Data operasional Excel
@@ -191,14 +240,19 @@ ai_data_analytics_chatbot/
 │   ├── Kebijakan_Refund_dan_Chargeback.docx  # Kebijakan refund internal
 │   └── Laporan_Insiden_BCA_VA_Oktober_2024.txt # Post-mortem anomali
 ├── mcp_servers/
-│   ├── analytics_server.py    # FastMCP Tool: Schema & SQL Query Runner
-│   └── knowledge_server.py    # FastMCP Tool: Semantic RAG Retrieval
+│   ├── source_registry.py     # Registry multi-sumber: fetch URL, cache TTL, DuckDB, allowlist
+│   ├── analytics_server.py    # FastMCP Tools: schema, SQL postgres & multi-sumber
+│   └── knowledge_server.py    # FastMCP Tool: RAG (overlap, threshold, PDF vision)
 ├── scripts/
 │   ├── seed_data.py           # Generator data transaksi sintetis
 │   ├── generate_docs_and_excel.py # Generator dokumen & populator ChromaDB
-│   └── evaluate.py            # Suite tolok ukur evaluasi RAG & SQL
+│   ├── evaluate.py            # Suite tolok ukur evaluasi RAG & SQL
+│   └── smoke_test.py          # Uji cepat multi-sumber & chat store
 ├── static/
-│   └── index.html             # Antarmuka web responsif (Tailwind + Plotly)
+│   ├── index.html             # Web UI (sessionId, restore history, badge sumber)
+│   └── vendor/plotly-basic.min.js # Plotly basic self-host (lazy-load, ~1MB)
+├── data_sources.json          # Daftar sumber CSV/XLSX/JSON/gsheet (URL)
+├── data_sources.example.json  # Contoh konfigurasi sumber
 ├── docker-compose.yml         # Konfigurasi container PostgreSQL 16
 ├── requirements.txt           # Daftar pustaka & dependensi sistem
 ├── run.py                     # Entrypoint runner aplikasi
@@ -208,9 +262,12 @@ ai_data_analytics_chatbot/
 ---
 
 ## 🔒 Tata Kelola Keamanan (Security Governance)
-1. **Prinsip Hak Akses Minimal (*Least Privilege*):** Server analitik hanya menerima kueri `SELECT`. Segala bentuk mutasi data (`UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `ALTER`) langsung ditolak di tingkat validasi AST/Regex.
-2. **Karantina Data Sensitif:** Data yang disajikan ke LLM difilter dari informasi rahasia *credentials*, hanya menyajikan metadata skema dan hasil agregat.
-3. **Robust Sanitization:** Penanganan tipe data numerik presisi (`Decimal`, `DateTime`) dari PostgreSQL dilakukan sebelum serialisasi JSON untuk mencegah galat runtime.
+1. **Prinsip Hak Akses Minimal (*Least Privilege*):** Semua engine (PostgreSQL & DuckDB) hanya menerima kueri `SELECT`/`WITH`. Mutasi data (`UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `ALTER`, dll), multi-statement, dan perintah berbahaya DuckDB (`ATTACH`, `COPY`, `INSTALL`, ...) ditolak guardrail terpusat.
+2. **Allowlist Sumber & Tabel:** AI hanya boleh menyentuh sumber terdaftar di registry dan tabel PostgreSQL pada `PG_ALLOWED_TABLES` (default: `transactions`). Tabel riwayat chat sengaja dikecualikan dari jangkauan text-to-SQL. Skema yang dilihat LLM pun difilter allowlist.
+3. **Koneksi Read-Only:** sesi PostgreSQL analitik di-set `readonly=True` di level driver, di luar guardrail regex.
+4. **Karantina Data Sensitif:** Data yang disajikan ke LLM difilter dari informasi rahasia *credentials*, hanya menyajikan metadata skema dan hasil agregat.
+5. **Robust Sanitization:** Penanganan tipe data numerik presisi (`Decimal`, `DateTime`) dilakukan sebelum serialisasi JSON untuk mencegah galat runtime.
+6. **Anti-Halusinasi Saat Gagal:** budget retry habis -> jawaban deterministik "tidak ditemukan" tanpa panggilan LLM; kuota habis -> pesan ramah + data yang sudah diambil, bukan error mentah.
 
 ---
 

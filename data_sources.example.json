@@ -1,0 +1,29 @@
+{
+  "_petunjuk": "Salin file ini menjadi data_sources.json lalu isi daftar sources. Tipe: csv | xlsx | json | gsheet. Untuk gsheet cukup URL spreadsheet publik (Anyone with the link - Viewer); semua tab ditemukan otomatis. Nama sumber/tab dinormalisasi jadi snake_case dan dipakai sebagai nama tabel SQL.",
+  "sources": [
+    {
+      "name": "penjualan_online",
+      "type": "csv",
+      "url": "https://raw.githubusercontent.com/USER/REPO/main/data/transactions.csv",
+      "description": "Salinan transaksi dari repository (contoh)"
+    },
+    {
+      "name": "laporan_operasional",
+      "type": "gsheet",
+      "url": "https://docs.google.com/spreadsheets/d/CONTOH_SHEET_ID/edit",
+      "description": "Google Sheets multi-tab: tiap tab menjadi tabel terpisah"
+    },
+    {
+      "name": "target_bulanan",
+      "type": "xlsx",
+      "url": "https://contoh.com/target.xlsx",
+      "description": "File Excel dari URL"
+    },
+    {
+      "name": "log_ringkas",
+      "type": "json",
+      "url": "https://contoh.com/log.json",
+      "description": "JSON array of objects atau JSON Lines"
+    }
+  ]
+}
