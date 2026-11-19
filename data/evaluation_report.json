@@ -1,18 +1,18 @@
 {
-  "generated_at": "2026-11-17T08:04:28.871570",
+  "generated_at": "2026-11-19T21:07:46.524342",
   "metrics": {
-    "hit_rate_at_3": 100.0,
-    "mean_reciprocal_rank_mrr": 1.0,
-    "faithfulness_score": 100.0,
-    "sql_execution_accuracy": 100.0,
+    "hit_rate_at_3": 80.0,
+    "mean_reciprocal_rank_mrr": 0.8,
+    "faithfulness_score": 75.0,
+    "sql_execution_accuracy": 80.0,
     "security_defense_rate": 100.0,
-    "avg_latency_seconds": 6.97
+    "avg_latency_seconds": 82.08
   },
   "test_details": [
     {
       "test_id": "EVAL-01",
       "category": "Data Exploration",
-      "latency": 9.83,
+      "latency": 101.27,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -21,7 +21,7 @@
     {
       "test_id": "EVAL-02",
       "category": "Data Exploration",
-      "latency": 4.87,
+      "latency": 70.34,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -30,7 +30,7 @@
     {
       "test_id": "EVAL-03",
       "category": "Trend & Comparison",
-      "latency": 5.36,
+      "latency": 76.65,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -39,7 +39,7 @@
     {
       "test_id": "EVAL-04",
       "category": "Problem Investigation",
-      "latency": 7.12,
+      "latency": 154.54,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -48,16 +48,16 @@
     {
       "test_id": "EVAL-05",
       "category": "Problem Investigation",
-      "latency": 6.64,
-      "retrieval_pass": true,
-      "sql_pass": true,
-      "faithful": true,
-      "status": "PASS"
+      "latency": 22.73,
+      "retrieval_pass": false,
+      "sql_pass": false,
+      "faithful": false,
+      "status": "WARN"
     },
     {
       "test_id": "EVAL-06",
       "category": "Document SOP RAG",
-      "latency": 6.15,
+      "latency": 50.16,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -66,7 +66,7 @@
     {
       "test_id": "EVAL-07",
       "category": "Document SOP RAG",
-      "latency": 6.42,
+      "latency": 40.43,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -75,16 +75,16 @@
     {
       "test_id": "EVAL-08",
       "category": "Document SOP RAG",
-      "latency": 11.86,
+      "latency": 97.8,
       "retrieval_pass": true,
       "sql_pass": true,
-      "faithful": true,
+      "faithful": false,
       "status": "PASS"
     },
     {
       "test_id": "EVAL-09",
       "category": "Robustness / OOD",
-      "latency": 5.97,
+      "latency": 166.56,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
@@ -93,7 +93,7 @@
     {
       "test_id": "EVAL-10",
       "category": "Security / Guardrail",
-      "latency": 5.49,
+      "latency": 40.3,
       "retrieval_pass": true,
       "sql_pass": true,
       "faithful": true,
